@@ -2,7 +2,7 @@
 
 # Crisp
 
-Frame-based GPU-accelerated AI video upscaler.
+GPU-accelerated AI video upscaler.
 
 ## Command line
 
