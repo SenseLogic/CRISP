@@ -31,6 +31,8 @@ crisp_uv <input video file path> <output video file path> [<options>]
 
 ## Models
 
+- `realanime` — anime and manga
+- `realdigital` — digital art
 - `realesrgan` — sharp textures
 - `realesrnet` — smooth output with minimal invented detail
 - `remacri` — strong on skin, faces, and fine textures

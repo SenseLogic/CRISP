@@ -27,10 +27,12 @@ try:
     from basicsr.archs.rrdbnet_arch import RRDBNet;
     import cv2;
     import ffmpeg;
+    import math;
     import mimetypes;
     import numpy as np;
     from pathlib import Path;
     from realesrgan import RealESRGANer;
+    from realesrgan.archs.srvgg_arch import SRVGGNetCompact;
     import shutil;
     import sys;
     import torch;
@@ -51,12 +53,22 @@ DEFAULT_MAX_RATIO = 4.0;
 DEFAULT_COMPRESSION = 22;
 DEFAULT_TILE_SIZE = 0;
 AVAILABLE_MODEL_NAME_LIST = (
-    "remacri",
-    "realesrnet",
+    "realanime",
+    "realdigital",
     "realesrgan",
-    "ultrasharp",
+    "realesrnet",
+    "remacri",
     "ultramix",
+    "ultrasharp",
     );
+MODEL_BLOCK_COUNT = {
+    "realdigital": 6,
+    };
+DEFAULT_MODEL_BLOCK_COUNT = 23;
+SRVGG_MODEL_NAME_SET = {
+    "realanime",
+    };
+DEFAULT_SRVGG_CONV_COUNT = 16;
 
 APPLICATION_FOLDER_PATH = Path( __file__ ).resolve().parent;
 MODEL_FOLDER_PATH = APPLICATION_FOLDER_PATH / "MODEL";
@@ -69,7 +81,7 @@ class CrispRealESRGANer( RealESRGANer ):
         self,
         scale: int,
         model_path: str,
-        model: RRDBNet,
+        model: torch.nn.Module,
         tile: int = 0,
         tile_pad: int = 10,
         pre_pad: int = 0,
@@ -160,6 +172,12 @@ class VideoReader:
         self.width = video_meta_info_dictionary[ "width" ];
         self.height = video_meta_info_dictionary[ "height" ];
         self.input_frames_per_second = video_meta_info_dictionary[ "frames_per_second" ];
+        self.display_aspect_ratio = (
+            video_meta_info_dictionary[ "display_aspect_ratio" ]
+            );
+        self.sample_aspect_ratio = (
+            video_meta_info_dictionary[ "sample_aspect_ratio" ]
+            );
         self.audio_stream = video_meta_info_dictionary[ "audio_stream" ];
         self.frame_count = video_meta_info_dictionary[ "frame_count" ];
 
@@ -182,6 +200,22 @@ class VideoReader:
             return self.video_reader_arguments.frames_per_second;
 
         return self.input_frames_per_second;
+
+    # ~~
+
+    def get_display_aspect_ratio(
+        self
+        ) -> str | None:
+
+        return self.display_aspect_ratio;
+
+    # ~~
+
+    def get_sample_aspect_ratio(
+        self
+        ) -> str | None:
+
+        return self.sample_aspect_ratio;
 
     # ~~
 
@@ -246,7 +280,9 @@ class VideoWriter:
         output_height: int,
         output_width: int,
         output_video_file_path: str,
-        frames_per_second: float
+        frames_per_second: float,
+        display_aspect_ratio: str | None = None,
+        sample_aspect_ratio: str | None = None
         ) -> None:
 
         ffmpeg_output_argument_by_name_dictionary = {
@@ -255,6 +291,13 @@ class VideoWriter:
             "crf": video_writer_arguments.compression,
             "loglevel": "error"
             };
+
+        ffmpeg_output_argument_by_name_dictionary.update(
+            get_video_aspect_ratio_output_options(
+                display_aspect_ratio,
+                sample_aspect_ratio
+                )
+            );
 
         raw_video_input = ffmpeg.input(
             "pipe:",
@@ -340,6 +383,132 @@ def get_ffprobe_command(
 
 # ~~
 
+def is_valid_aspect_ratio(
+    aspect_ratio: str | None
+    ) -> bool:
+
+    return (
+        aspect_ratio is not None
+        and aspect_ratio not in ( "N/A", "0:1" )
+        );
+
+# ~~
+
+def get_video_aspect_ratio_output_options(
+    display_aspect_ratio: str | None,
+    sample_aspect_ratio: str | None
+    ) -> dict[str, str]:
+
+    if is_valid_aspect_ratio( display_aspect_ratio ):
+
+        return { "aspect": display_aspect_ratio };
+
+    if is_valid_aspect_ratio( sample_aspect_ratio ):
+
+        return { "sar": sample_aspect_ratio };
+
+    return {};
+
+# ~~
+
+def get_output_aspect_ratios(
+    output_width: int,
+    output_height: int,
+    input_width: int,
+    input_height: int,
+    display_aspect_ratio: str | None,
+    sample_aspect_ratio: str | None
+    ) -> tuple[ str | None, str | None ]:
+
+    if output_width == input_width and output_height == input_height:
+
+        return display_aspect_ratio, sample_aspect_ratio;
+
+    # Uniform scale keeps the same picture aspect; crop does not.
+    if output_width * input_height == input_width * output_height:
+
+        return display_aspect_ratio, sample_aspect_ratio;
+
+    # Crop/resize changed the frame geometry: do not reuse the source DAR.
+    # Keep SAR when known so anamorphic pixels stay correct; otherwise set
+    # DAR from the new pixel dimensions (square pixels).
+    if is_valid_aspect_ratio( sample_aspect_ratio ):
+
+        return None, sample_aspect_ratio;
+
+    if is_valid_aspect_ratio( display_aspect_ratio ):
+
+        return (
+            get_resized_display_aspect_ratio(
+                display_aspect_ratio,
+                input_width,
+                input_height,
+                output_width,
+                output_height
+                ),
+            None
+            );
+
+    return f"{output_width}:{output_height}", None;
+
+# ~~
+
+def get_aspect_ratio_parts(
+    aspect_ratio: str
+    ) -> tuple[ int, int ] | None:
+
+    try:
+
+        numerator_text, denominator_text = aspect_ratio.split( ":", 1 );
+        numerator = int( numerator_text );
+        denominator = int( denominator_text );
+
+    except ValueError:
+
+        return None;
+
+    if numerator <= 0 or denominator <= 0:
+
+        return None;
+
+    return numerator, denominator;
+
+# ~~
+
+def get_simplified_aspect_ratio(
+    numerator: int,
+    denominator: int
+    ) -> str:
+
+    common_divisor = math.gcd( numerator, denominator );
+
+    return f"{numerator // common_divisor}:{denominator // common_divisor}";
+
+# ~~
+
+def get_resized_display_aspect_ratio(
+    display_aspect_ratio: str,
+    input_width: int,
+    input_height: int,
+    output_width: int,
+    output_height: int
+    ) -> str:
+
+    aspect_ratio_parts = get_aspect_ratio_parts( display_aspect_ratio );
+
+    if aspect_ratio_parts is None:
+
+        return f"{output_width}:{output_height}";
+
+    display_width, display_height = aspect_ratio_parts;
+
+    return get_simplified_aspect_ratio(
+        display_width * output_width * input_height,
+        display_height * output_height * input_width
+        );
+
+# ~~
+
 def get_video_meta_info(
     input_video_file_path: str
     ) -> dict[str, Any]:
@@ -366,6 +535,8 @@ def get_video_meta_info(
             "width": video_stream[ "width" ],
             "height": video_stream[ "height" ],
             "frames_per_second": eval( video_stream[ "avg_frame_rate" ] ),
+            "display_aspect_ratio": video_stream.get( "display_aspect_ratio" ),
+            "sample_aspect_ratio": video_stream.get( "sample_aspect_ratio" ),
             "audio_stream": (
                 ffmpeg.input( input_video_file_path ).audio
                 if has_audio_stream
@@ -768,7 +939,46 @@ def get_state_dict_from_model_checkpoint(
 
 # ~~
 
+def get_model_block_count(
+    model_name: str
+    ) -> int:
+
+    return MODEL_BLOCK_COUNT.get( model_name, DEFAULT_MODEL_BLOCK_COUNT );
+
+# ~~
+
+def get_model(
+    model_name: str
+    ) -> torch.nn.Module:
+
+    if model_name in SRVGG_MODEL_NAME_SET:
+
+        return (
+            SRVGGNetCompact(
+                num_in_ch=3,
+                num_out_ch=3,
+                num_feat=64,
+                num_conv=DEFAULT_SRVGG_CONV_COUNT,
+                upscale=MODEL_SCALE,
+                act_type="prelu"
+                )
+            );
+
+    return (
+        RRDBNet(
+            num_in_ch=3,
+            num_out_ch=3,
+            num_feat=64,
+            num_block=get_model_block_count( model_name ),
+            num_grow_ch=32,
+            scale=MODEL_SCALE
+            )
+        );
+
+# ~~
+
 def get_upsampler(
+    model_name: str,
     model_weights_file_path: str,
     tile_size: int
     ) -> CrispRealESRGANer:
@@ -779,22 +989,11 @@ def get_upsampler(
 
         print( "CUDA not available; using CPU (slow).", file=sys.stderr );
 
-    model = (
-        RRDBNet(
-            num_in_ch=3,
-            num_out_ch=3,
-            num_feat=64,
-            num_block=23,
-            num_grow_ch=32,
-            scale=MODEL_SCALE
-            )
-        );
-
     return (
         CrispRealESRGANer(
             scale=MODEL_SCALE,
             model_path=model_weights_file_path,
-            model=model,
+            model=get_model( model_name ),
             tile=tile_size,
             tile_pad=10,
             pre_pad=0,
@@ -1009,6 +1208,17 @@ def upscale_mp4(
             )
         );
 
+    output_display_aspect_ratio, output_sample_aspect_ratio = (
+        get_output_aspect_ratios(
+            output_width,
+            output_height,
+            input_width,
+            input_height,
+            video_reader.get_display_aspect_ratio(),
+            video_reader.get_sample_aspect_ratio()
+            )
+        );
+
     video_writer = None;
     progress_bar = None;
 
@@ -1023,7 +1233,9 @@ def upscale_mp4(
                 output_height,
                 output_width,
                 str( output_video_file_path ),
-                video_reader.get_frames_per_second()
+                video_reader.get_frames_per_second(),
+                output_display_aspect_ratio,
+                output_sample_aspect_ratio
                 )
             );
 
@@ -1156,6 +1368,7 @@ def main(
 
         upsampler = (
             get_upsampler(
+                command_line_arguments.model,
                 get_model_weights_file_path( command_line_arguments.model ),
                 tile_size=command_line_arguments.tile_size
                 )
