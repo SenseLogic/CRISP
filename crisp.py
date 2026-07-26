@@ -42,7 +42,7 @@ except ImportError as import_error:
 
     print( f"Missing dependency: {import_error}", file=sys.stderr );
     print( "Install with:", file=sys.stderr );
-    print( "  run install.bat", file=sys.stderr );
+    print( "  run install_packages_cuda.bat, install_packages_rocm.bat, or install_packages_cpu.bat", file=sys.stderr );
     sys.exit( 1 );
 
 # -- CONSTANTS
@@ -627,6 +627,34 @@ def parse_arguments(
         help=f"Upscaling model (default: {DEFAULT_MODEL_NAME})"
         );
 
+    compute_backend_group = argument_parser.add_mutually_exclusive_group();
+
+    compute_backend_group.add_argument(
+        "--cpu",
+        action="store_const",
+        const="cpu",
+        dest="compute_backend",
+        help="Force CPU computation"
+        );
+
+    compute_backend_group.add_argument(
+        "--cuda",
+        action="store_const",
+        const="cuda",
+        dest="compute_backend",
+        help="Force NVIDIA CUDA computation"
+        );
+
+    compute_backend_group.add_argument(
+        "--rocm",
+        action="store_const",
+        const="rocm",
+        dest="compute_backend",
+        help="Force AMD ROCm computation"
+        );
+
+    argument_parser.set_defaults( compute_backend=None );
+
     return argument_parser.parse_args();
 
 # ~~
@@ -977,17 +1005,92 @@ def get_model(
 
 # ~~
 
+def is_rocm_pytorch(
+    ) -> bool:
+
+    return getattr( torch.version, "hip", None ) is not None;
+
+# ~~
+
+def is_nvidia_cuda_available(
+    ) -> bool:
+
+    return torch.cuda.is_available() and not is_rocm_pytorch();
+
+# ~~
+
+def is_amd_rocm_available(
+    ) -> bool:
+
+    return torch.cuda.is_available() and is_rocm_pytorch();
+
+# ~~
+
+def resolve_compute_backend(
+    requested_compute_backend: str | None
+    ) -> str:
+
+    nvidia_cuda_is_available = is_nvidia_cuda_available();
+    amd_rocm_is_available = is_amd_rocm_available();
+
+    if requested_compute_backend == "cpu":
+
+        return "cpu";
+
+    if requested_compute_backend == "cuda":
+
+        if not nvidia_cuda_is_available:
+
+            print( "CUDA was requested but is not available.", file=sys.stderr );
+            sys.exit( 1 );
+
+        return "cuda";
+
+    if requested_compute_backend == "rocm":
+
+        if not amd_rocm_is_available:
+
+            print( "ROCm was requested but is not available.", file=sys.stderr );
+            sys.exit( 1 );
+
+        return "rocm";
+
+    if nvidia_cuda_is_available:
+
+        return "cuda";
+
+    if amd_rocm_is_available:
+
+        return "rocm";
+
+    return "cpu";
+
+# ~~
+
 def get_upsampler(
     model_name: str,
     model_weights_file_path: str,
-    tile_size: int
+    tile_size: int,
+    compute_backend: str
     ) -> CrispRealESRGANer:
 
-    is_cuda_available = torch.cuda.is_available();
+    if compute_backend == "cpu":
 
-    if not is_cuda_available:
+        print( "Using CPU (slow).", file=sys.stderr );
+        device = torch.device( "cpu" );
+        half = False;
 
-        print( "CUDA not available; using CPU (slow).", file=sys.stderr );
+    elif compute_backend == "cuda":
+
+        print( "Using CUDA.", file=sys.stderr );
+        device = torch.device( "cuda" );
+        half = True;
+
+    else:
+
+        print( "Using ROCm.", file=sys.stderr );
+        device = torch.device( "cuda" );
+        half = True;
 
     return (
         CrispRealESRGANer(
@@ -997,8 +1100,8 @@ def get_upsampler(
             tile=tile_size,
             tile_pad=10,
             pre_pad=0,
-            half=is_cuda_available,
-            device=None
+            half=half,
+            device=device
             )
         );
 
@@ -1366,11 +1469,16 @@ def main(
 
     if command_line_arguments.max_ratio > 1:
 
+        compute_backend = (
+            resolve_compute_backend( command_line_arguments.compute_backend )
+            );
+
         upsampler = (
             get_upsampler(
                 command_line_arguments.model,
                 get_model_weights_file_path( command_line_arguments.model ),
-                tile_size=command_line_arguments.tile_size
+                tile_size=command_line_arguments.tile_size,
+                compute_backend=compute_backend
                 )
             );
 
