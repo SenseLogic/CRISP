@@ -36,6 +36,9 @@ If none of `--cpu`, `--cuda`, or `--rocm` is passed, Crisp uses CUDA when availa
 
 ## Models
 
+- `bsrgan` — real-world blind super-resolution
+- `bsrnet` — smooth real-world blind super-resolution
+- `highfidelity` — anime with high-frequency detail
 - `realanime` — anime and manga
 - `realdigital` — digital art
 - `realesrgan` — sharp textures
