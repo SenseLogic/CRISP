@@ -25,7 +25,7 @@ crisp_uv <input video file path> <output video file path> [<options>]
 --max-width <maximum_width=0>
 --max-height <maximum_height=0>
 --tile-size <tile_size=0>
---compression <compression=22>
+--compression <compression=20>
 --skip
 --cpu
 --cuda
@@ -66,15 +66,15 @@ crisp input_video.mp4 output_video.mp4 --model ultramix
 ```
 
 ```
-crisp input_video.mp4 output_video.mp4 --compression 22
+crisp input_video.mp4 output_video.mp4 --compression 20
 ```
 
 ```
-crisp input_video.mp4 output_video.mp4 --compression 22 --max-height 1080
+crisp input_video.mp4 output_video.mp4 --compression 20 --max-height 1080
 ```
 
 ```
-crisp input_video.mp4 output_video.mp4 --compression 22 --tile-size 400
+crisp input_video.mp4 output_video.mp4 --compression 20 --tile-size 400
 ```
 
 ## Install
